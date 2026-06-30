@@ -107,9 +107,16 @@ WLED_DEBUG=1 python lamp_status.py working
 - **Animated statuses:** a WLED preset can store any effect, not just a solid color — make "working" a slow breathing blue, "attention" a blink. Just re-save the preset with an effect selected.
 - **More states:** map other hooks (e.g. `SubagentStop`, `PreCompact`) to extra presets.
 
+## Multiple sessions
+
+Run as many Claude Code sessions as you like against one lamp. Each session's state is tracked by its `session_id` (read from the hook's stdin), and the lamp shows the **highest-priority** state across all live sessions:
+
+> attention (amber) · error (red) · working (blue) · done (green)
+
+So an **amber from *any* session latches the lamp amber** until that session is no longer blocked — a busy or idle session can't paint over "someone needs you." When the last session ends, the lamp turns off. The script also de-dups repeats, so a flurry of `PreToolUse` "working" events sends at most one request.
+
 ## Limitations
 
-- **One lamp, one session.** Two concurrent Claude Code sessions both drive the same lamp (last write wins), so one session's "working" blue can stomp another's "attention" amber — there's no session arbitration. Run a single session, or use one lamp per session. (The script de-dups repeats, so a single session never spams the lamp.)
 - **Green lags ~60s** behind the actual turn-end — see [How it works](#how-it-works). This is the deliberate price of never showing a false green.
 
 ## Security

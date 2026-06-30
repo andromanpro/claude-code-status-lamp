@@ -1,81 +1,169 @@
 #!/usr/bin/env python3
-"""Claude Code -> WLED status light. Applies a WLED preset by status name.
+"""Claude Code -> WLED status light, with multi-session arbitration.
 
 Called from Claude Code hooks (see examples/settings-hooks.json):
 
-    python lamp_status.py working     # blue  - Claude is working
-    python lamp_status.py attention   # amber - needs your input / permission
-    python lamp_status.py done        # green - idle, waiting for you
-    python lamp_status.py error       # red   - a turn failed
-    python lamp_status.py off         # lamp off (e.g. on session end)
+    python lamp_status.py working     # blue  - this session is working
+    python lamp_status.py attention   # amber - this session needs you
+    python lamp_status.py done        # green - this session is idle
+    python lamp_status.py error       # red   - this session's turn failed
+    python lamp_status.py off         # this session ended
 
-Configure the lamp address via the WLED_IP environment variable, or edit
-LAMP_IP below.
+Multiple Claude Code sessions can share one lamp. Each session's state is
+tracked by its session_id (read from the hook's stdin JSON) in a shared file in
+the temp dir, and the lamp shows the highest-priority state across all live
+sessions:
 
-Fail-silent: any network/lamp error is swallowed so Claude is never blocked.
-Set WLED_DEBUG=1 to print the traceback when debugging why nothing happens.
+    attention (amber)  >  error (red)  >  working (blue)  >  done (green)
 
-De-dup: the last sent preset is cached in the temp dir; an identical repeat
-(e.g. PreToolUse firing "working" on every tool call) is skipped, so the lamp
-isn't spammed and the meaningful transitions stay responsive.
+So "attention" from any session latches the lamp amber until that session is no
+longer blocked, even if another session is busy or idle. With a single session
+it behaves like a plain one-state indicator. When the last session ends (off),
+the lamp turns off.
+
+Configure the lamp via the WLED_IP env var, or edit LAMP_IP below.
+Fail-silent: any error is swallowed so Claude is never blocked. Set WLED_DEBUG=1
+to print tracebacks. A bare integer arg ("python lamp_status.py 4") applies that
+preset directly, bypassing the arbiter (manual override).
 """
 import os
 import sys
 import json
+import time
 import tempfile
 import urllib.request
 
-# Your WLED lamp IP. Override with the WLED_IP env var, or edit this line.
 LAMP_IP = os.environ.get("WLED_IP", "192.168.1.50")
 
-# status name -> WLED preset number (created by init_presets.py / presets.json)
-PRESETS = {"working": 1, "attention": 2, "done": 3, "error": 5, "off": 0}
+# session state -> WLED preset number
+STATE_PRESET = {"attention": 2, "error": 5, "working": 1, "done": 3}
+# aggregation priority, highest first
+PRIORITY = ["attention", "error", "working", "done"]
+TTL = 6 * 3600  # forget a session not updated in 6h (crash safety net)
 
-_STATE_FILE = os.path.join(tempfile.gettempdir(), "claude_lamp_last")
+_TMP = tempfile.gettempdir()
+_SESSIONS = os.path.join(_TMP, "claude_lamp_sessions.json")
+_LAST = os.path.join(_TMP, "claude_lamp_last")
+_LOCK = os.path.join(_TMP, "claude_lamp.lock")
 
 
-def _resolve(arg):
-    preset = PRESETS.get(arg)
-    if preset is None:
+def _acquire():
+    """Tiny cross-platform spin lock; best-effort (returns None after 2s)."""
+    start = time.time()
+    while True:
         try:
-            preset = int(arg)          # bare integer preset id
-        except ValueError:
-            preset = 3                 # unknown -> done
-    return preset if preset >= 0 else 3
+            return os.open(_LOCK, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(_LOCK) > 5:  # stale lock
+                    os.remove(_LOCK)
+                    continue
+            except OSError:
+                pass
+            if time.time() - start > 2:
+                return None
+            time.sleep(0.05)
+
+
+def _release(fd):
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.remove(_LOCK)
+    except OSError:
+        pass
+
+
+def _load():
+    try:
+        with open(_SESSIONS) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save(sessions):
+    try:
+        tmp = _SESSIONS + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(sessions, f)
+        os.replace(tmp, _SESSIONS)
+    except OSError:
+        pass
+
+
+def _session_id():
+    try:
+        if not sys.stdin.isatty():
+            raw = sys.stdin.buffer.read()
+            if raw:
+                return json.loads(raw.decode("utf-8-sig", "replace")).get("session_id") or "default"
+    except Exception:
+        pass
+    return "default"
+
+
+def _apply(preset):
+    """POST the preset (or turn off for 0), de-duping identical repeats."""
+    try:
+        with open(_LAST) as f:
+            if f.read().strip() == str(preset):
+                return
+    except OSError:
+        pass
+    payload = {"on": False} if preset == 0 else {"on": True, "ps": preset}
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        f"http://{LAMP_IP}/json/state",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=2)
+    try:
+        with open(_LAST, "w") as f:
+            f.write(str(preset))
+    except OSError:
+        pass
 
 
 def main():
     try:
         arg = (sys.argv[1] if len(sys.argv) > 1 else "done").strip().lower()
-        preset = _resolve(arg)
 
-        # de-dup: skip if this is the same preset we last sent
+        # manual override: a bare integer preset bypasses the arbiter
+        if arg not in STATE_PRESET and arg != "off":
+            try:
+                _apply(max(0, int(arg)))
+            except ValueError:
+                _apply(STATE_PRESET["done"])
+            return
+
+        sid = _session_id()
+        now = int(time.time())
+        fd = _acquire()
         try:
-            with open(_STATE_FILE, "r") as f:
-                if f.read().strip() == str(preset):
-                    return
-        except OSError:
-            pass
+            sessions = _load()
+            if arg == "off":
+                sessions.pop(sid, None)
+            else:
+                sessions[sid] = {"s": arg, "t": now}
+            live = {k: v for k, v in sessions.items() if now - v.get("t", 0) <= TTL}
+            _save(live)
+            states = {v.get("s") for v in live.values()}
+            agg = next((s for s in PRIORITY if s in states), None)
+        finally:
+            _release(fd)
 
-        body = json.dumps({"ps": preset}).encode()
-        req = urllib.request.Request(
-            f"http://{LAMP_IP}/json/state",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2)
-
-        try:
-            with open(_STATE_FILE, "w") as f:
-                f.write(str(preset))
-        except OSError:
-            pass
+        _apply(STATE_PRESET[agg] if agg else 0)  # no live sessions -> off
     except Exception:
         if os.environ.get("WLED_DEBUG"):
             import traceback
             traceback.print_exc()
-        # otherwise stay silent: lamp offline / wrong network must never block Claude
 
 
 if __name__ == "__main__":
