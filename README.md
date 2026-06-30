@@ -1,5 +1,7 @@
 # Claude Code Status Lamp 🚦
 
+**English** · [Русский](README.ru.md)
+
 ![Claude Code Status Lamp cycling blue → amber → green](docs/lamp-colors.gif)
 
 **Glance at a lamp instead of babysitting the terminal.** This turns a [WLED](https://github.com/wled/WLED) lamp — including a reflashed [GyverLamp](https://github.com/AlexGyver/GyverLamp) — into an ambient status light for [Claude Code](https://claude.com/claude-code).
