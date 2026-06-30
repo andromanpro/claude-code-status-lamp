@@ -1,32 +1,46 @@
 # Claude Code Status Lamp 🚦
 
-Turn any **[WLED](https://github.com/wled/WLED)** lamp — including a re-flashed **[GyverLamp](https://github.com/AlexGyver/GyverLamp)** — into a physical status light for [Claude Code](https://claude.com/claude-code). The lamp changes color with what Claude is doing:
+![Claude Code Status Lamp cycling blue → amber → green](docs/lamp-colors.gif)
+
+**Glance at a lamp instead of babysitting the terminal.** This turns a [WLED](https://github.com/wled/WLED) lamp — including a reflashed [GyverLamp](https://github.com/AlexGyver/GyverLamp) — into an ambient status light for [Claude Code](https://claude.com/claude-code).
+
+The real feature isn't "blue means working." It's **amber = Claude needs *you***. Drop into your own task, look away from the screen, and let the lamp call you back the moment Claude is blocked on a permission or a question. If you hyperfocus, that's the whole point: get your attention back without staring at the terminal waiting for it to need you.
 
 - 🔵 **Blue** — Claude is working
-- 🟡 **Amber** — Claude needs your attention (permission / waiting for input)
-- 🟢 **Green** — Claude finished the turn
+- 🟡 **Amber** — Claude needs you (a permission, or waiting on your input)
+- 🟢 **Green** — idle, your turn
+- 🔴 **Red** — a turn failed
 
-It hooks into Claude Code's lifecycle events, so there's no polling and no extra service — just a tiny script that fires a one-line HTTP request to the lamp.
-
-<!-- Add your photo here: ![Claude Code Status Lamp](docs/lamp.jpg) -->
+No polling, no daemon, no service — just a tiny standard-library Python script that fires one HTTP request to the lamp from Claude Code's lifecycle hooks. It's **fail-silent**: lamp offline or on another network → the hook does nothing and never blocks Claude.
 
 ## How it works
 
-Claude Code [hooks](https://code.claude.com/docs/en/hooks) run a shell command on lifecycle events. Each event calls `lamp_status.py <state>`, which POSTs `{"ps": N}` to WLED's JSON API to apply a preset (a solid color):
+Claude Code [hooks](https://code.claude.com/docs/en/hooks) run a shell command on lifecycle events. Each event calls `lamp_status.py <state>`, which POSTs `{"ps": N}` to WLED's JSON API to apply a preset:
 
 ```
-UserPromptSubmit ──▶ lamp_status.py working    ──▶ WLED preset 1 (blue)
-Notification     ──▶ lamp_status.py attention  ──▶ WLED preset 2 (amber)
-Stop             ──▶ lamp_status.py done       ──▶ WLED preset 3 (green)
+UserPromptSubmit, PreToolUse       ──▶ working    ──▶ preset 1 (blue)
+Notification [permission_prompt]   ──▶ attention  ──▶ preset 2 (amber)
+Notification [idle_prompt]         ──▶ done       ──▶ preset 3 (green)
+SessionStart                       ──▶ done       ──▶ preset 3 (green, resting)
+StopFailure                        ──▶ error      ──▶ preset 5 (red)
+SessionEnd                         ──▶ off
 ```
 
-`lamp_status.py` is **fail-silent**: if the lamp is offline or on another network, the hook does nothing and never blocks Claude.
+**Why `Stop` is deliberately *not* wired.** `Stop` fires whenever a turn ends — including when Claude launches a background subagent/workflow and is *still working*. Wiring `Stop → green` paints the lamp "done" mid-task (a false green). So green comes from `idle_prompt` (Claude is genuinely idle, waiting for you) and `SessionStart` instead.
+
+The trade-off: **green appears ~60s after the turn ends, not instantly**, because `idle_prompt` fires after a short idle period. That's intentional — we trade instant-green for never-lying-green. (Don't "helpfully" add `Stop → done` back; it reintroduces the false green.)
+
+## Requirements
+
+- **Python 3.6+** — standard library only, no `pip install`. On Windows use `py`, on macOS/Linux `python3`.
+- **WLED 0.14+** (tested on 16.x). Older builds may not accept the preset-save API.
+- A WLED lamp — any ESP8266/ESP32 + WS2812B you can flash WLED onto — on your LAN.
 
 ## Hardware
 
 - Any ESP8266/ESP32 board driving WS2812B (or compatible) LEDs, running **WLED**.
 - A **GyverLamp** (AlexGyver's addressable-LED matrix lamp) works great — just reflash it from stock firmware to WLED.
-- Needs ≥4 MB flash and a **2.4 GHz** WiFi network on the same subnet as the machine running Claude Code.
+- Needs ≥4 MB flash (the safe floor; 1 MB ESP-01 builds exist but are cramped) and a **2.4 GHz** Wi-Fi network on the same subnet as the machine running Claude Code.
 
 ## Setup
 
@@ -36,14 +50,16 @@ Use the browser flasher at **[install.wled.me](https://install.wled.me/)** (Chro
 
 > **Reflashing a GyverLamp?** Connect to the controller board's **own** micro-USB (the case jack is often power-only), use a **data** USB cable (not charge-only), and install the **CP2102 / CH340** driver if no COM port appears.
 
-### 2. Connect the lamp to 2.4 GHz WiFi
+### 2. Connect the lamp to 2.4 GHz Wi-Fi
 
-Join the `WLED-AP` network (password `wled1234`), open `http://4.3.2.1`, and enter your home WiFi.
+Join the `WLED-AP` network (password `wled1234`); the setup page usually pops up automatically — if not, open `http://4.3.2.1`. Enter your home Wi-Fi.
 
-> ⚠️ **The #1 gotcha.** ESP8266 is **2.4 GHz only** and does **not** reliably join **WiFi 6 (802.11ax)** access points. If the lamp won't connect:
-> - select the **2.4 GHz** SSID (not a `*_5G` one);
-> - in your router, set the 2.4 GHz band to **802.11 b/g/n** (disable WiFi 6 / "ax"). On **Xiaomi / Redmi** routers this is the web UI → **Settings → Wi-Fi settings → "WiFi 5 compatibility mode"**;
-> - keep encryption on **WPA2-PSK** (not WPA3 / mixed).
+> ⚠️ **The #1 gotcha.** ESP8266 is **2.4 GHz only** and often won't join a **Wi-Fi 6 (802.11ax)** access point. If the lamp won't connect:
+> - pick the **2.4 GHz** SSID (not a `*_5G` one);
+> - in your router, set the 2.4 GHz band to **802.11 b/g/n** — i.e. look for a **"disable Wi-Fi 6 / 802.11ax"**, **"b/g/n only"**, or **"compatibility"** toggle. It's labelled differently per vendor: **Xiaomi/Redmi** = *Wi-Fi settings → "WiFi 5 compatibility mode"*; **TP-Link/ASUS/Keenetic** = *Wireless mode → b/g/n mixed*;
+> - keep encryption on **WPA2-PSK** (ESP8266 doesn't do WPA3).
+>
+> Note this relaxes that band's security a little — fine on a home network (see [Security](#security)).
 
 ### 3. Find the lamp's IP
 
@@ -51,41 +67,65 @@ Check your router's client list, try `http://wled.local`, or scan your subnet. T
 
 ### 4. Create the status presets
 
-Run the setup script (replace with your lamp's IP):
+Run the init script (replace with your lamp's IP):
 
 ```bash
-python setup.py 192.168.1.50
+python init_presets.py 192.168.1.50
 ```
 
-…or in WLED upload [`presets.json`](presets.json) (Config → Security & Backup → Restore presets), …or create three **Solid**-color presets manually: `1` = blue, `2` = amber, `3` = green.
+It writes presets **1/2/3/5** and verifies each one. ⚠️ It overwrites those slots — change the numbers in the script if you already use them.
+
+…or restore [`presets.json`](presets.json) in WLED (Config → Security & Backup → Restore presets) — the more reliable path on a slow ESP8266. It also ships an optional preset **4 "Ambient"** (a rainbow scene the hooks never use — keep it as a resting glow or ignore it).
 
 ### 5. Set the LED count
 
-WLED → **Config → LED Preferences** → set the LED count to your matrix size (e.g. **256** for a 16×16) and the data pin (a GyverLamp uses **GPIO2 / D4**). Otherwise only part of the lamp lights up. Set the current limit to match your power supply.
+WLED → **Config → LED Preferences** → set the LED count to your matrix (e.g. **256** for a 16×16) and the data pin (a GyverLamp uses **GPIO2 / D4** — **check your own board's data pin**). Until you set the count, only part of the matrix lights — that's expected, not a failure. Set the current limit to match your power supply.
 
 ### 6. Install the hook script + hooks
 
-- Put `lamp_status.py` somewhere stable. Set your lamp IP via the `WLED_IP` environment variable, or edit `LAMP_IP` at the top of the file.
-- Merge the hooks from [`examples/settings-hooks.json`](examples/settings-hooks.json) into your Claude Code `~/.claude/settings.json`. **Merge** into the existing `hooks` object — don't overwrite it. Point each command at your `lamp_status.py` path and Python launcher.
+- Put `lamp_status.py` somewhere stable. Set the lamp IP via the `WLED_IP` env var, or edit `LAMP_IP` at the top.
+- Merge the hooks from [`examples/settings-hooks.json`](examples/settings-hooks.json) into your Claude Code `~/.claude/settings.json`. **Merge** into the existing `hooks` object — don't overwrite it. Replace `<python>` with your launcher (**Windows `py`**, **macOS/Linux `python3`**) and the path.
+- Field meanings: **`matcher`** filters which sub-event fires the hook (for `Notification`: `permission_prompt` vs `idle_prompt`; for `PreToolUse`: the tool name, `""` = all tools); **`async: true`** runs the command without blocking the turn; **`timeout`** caps it in seconds.
 
 ### 7. Test
 
-Submit a prompt → 🔵 blue. Claude finishes → 🟢 green. If nothing happens, run `/hooks` once (or restart Claude Code) so it reloads `settings.json`.
+Submit a prompt → 🔵 blue. Wait idle ~60s → 🟢 green. Trigger a permission → 🟡 amber.
+
+Nothing happening? Run `/hooks` (or restart Claude Code) so it reloads `settings.json`, then debug the script by hand:
+
+```bash
+WLED_DEBUG=1 python lamp_status.py working
+```
+
+`WLED_DEBUG=1` prints the traceback (wrong IP, wrong network, presets not created) instead of staying silent.
 
 ## Customization
 
-- **Colors:** edit the RGB tuples in `setup.py`, or re-save presets in the WLED app.
-- **Animated statuses:** a WLED preset can store any effect, not just a solid color — make "working" a breathing blue, "attention" a blink, etc. Just re-save the preset with an effect selected.
-- **More states:** map other hooks (`PreToolUse`, `SubagentStop`, `StopFailure`) to extra presets.
+- **Colors / brightness:** edit the RGB + `bri` values in `init_presets.py` (or re-save presets in the WLED app). Blue is on ~95% of the time, so it ships dimmest; amber ships brightest because it's the one that should grab you. Drop the values further for night use.
+- **Animated statuses:** a WLED preset can store any effect, not just a solid color — make "working" a slow breathing blue, "attention" a blink. Just re-save the preset with an effect selected.
+- **More states:** map other hooks (e.g. `SubagentStop`, `PreCompact`) to extra presets.
+
+## Limitations
+
+- **One lamp, one session.** Two concurrent Claude Code sessions both drive the same lamp (last write wins), so one session's "working" blue can stomp another's "attention" amber — there's no session arbitration. Run a single session, or use one lamp per session. (The script de-dups repeats, so a single session never spams the lamp.)
+- **Green lags ~60s** behind the actual turn-end — see [How it works](#how-it-works). This is the deliberate price of never showing a false green.
+
+## Security
+
+- **WLED has no authentication on the LAN.** Anyone on the same Wi-Fi can control (or repaint) the lamp. Keep it on a trusted home network; never port-forward / expose port 80 to the internet. WLED can set an AP password and a settings PIN if you want more.
+- **Hooks run arbitrary local commands.** You're merging command-execution config into `~/.claude/settings.json`. Read any hook config (including this one) before adding it, and only point it at scripts you've read.
+- Setup step 2 relaxes your 2.4 GHz band (b/g/n, WPA2) to get the ESP8266 online — a minor downgrade on that band. Fine at home; think twice on shared/office Wi-Fi.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Lamp won't join WiFi | 2.4 GHz only **and** disable WiFi 6 on the router (see step 2) |
+| Lamp won't join Wi-Fi | 2.4 GHz only **and** disable Wi-Fi 6 on the router (see step 2) |
 | Only part of the matrix lights | Set the correct LED count (step 5) |
 | No COM port when flashing | Install CP2102/CH340 driver; use a **data** USB cable; plug into the board's own USB, not the case power jack |
-| Hooks don't fire | Run `/hooks` or restart Claude Code to reload settings; verify the Python path in the command |
+| Hooks don't fire | `/hooks` (or restart Claude Code) to reload settings; run `WLED_DEBUG=1 python lamp_status.py working` by hand |
+| Lamp green when Claude is clearly busy | You wired `Stop → done` — remove it (see "Why Stop is deliberately not wired") |
+| Amber/green never differ | `Notification` needs split matchers (`permission_prompt` vs `idle_prompt`), not `matcher: ""` |
 | IP changed, lamp stopped reacting | Set a DHCP reservation; update `WLED_IP` |
 
 ## Credits

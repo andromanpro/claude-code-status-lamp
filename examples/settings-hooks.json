@@ -1,28 +1,25 @@
 {
-  "_comment": "MERGE these into your Claude Code ~/.claude/settings.json under the existing 'hooks' object. Do NOT overwrite hooks you already have. Replace the command with your Python launcher and the path to lamp_status.py. Set the lamp IP via the WLED_IP env var or inside lamp_status.py.",
+  "_comment": "MERGE this into your Claude Code ~/.claude/settings.json under the existing 'hooks' object — do NOT overwrite hooks you already have. Replace <python> with your launcher (Windows: py ; macOS/Linux: python3) and /path/to/lamp_status.py with the real path. Set the lamp IP via the WLED_IP env var or inside lamp_status.py. Field meanings: 'matcher' filters which sub-event fires the hook (for Notification: permission_prompt vs idle_prompt; for PreToolUse: tool name, \"\" = all tools); 'async': true runs the command without blocking the turn; 'timeout' caps it in seconds. IMPORTANT: Stop is intentionally NOT wired — it fires when a turn ends even if Claude just launched a background subagent/workflow and is still busy, which would flash a false green. Green comes from idle_prompt + SessionStart instead.",
 
   "hooks": {
     "UserPromptSubmit": [
-      {
-        "hooks": [
-          { "type": "command", "command": "python /path/to/lamp_status.py working", "async": true, "timeout": 5 }
-        ]
-      }
+      { "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py working", "async": true, "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py working", "async": true, "timeout": 5 } ] }
     ],
     "Notification": [
-      {
-        "matcher": "",
-        "hooks": [
-          { "type": "command", "command": "python /path/to/lamp_status.py attention", "async": true, "timeout": 5 }
-        ]
-      }
+      { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py attention", "async": true, "timeout": 5 } ] },
+      { "matcher": "idle_prompt", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py done", "async": true, "timeout": 5 } ] }
     ],
-    "Stop": [
-      {
-        "hooks": [
-          { "type": "command", "command": "python /path/to/lamp_status.py done", "async": true, "timeout": 5 }
-        ]
-      }
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py done", "async": true, "timeout": 5 } ] }
+    ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py error", "async": true, "timeout": 5 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py off", "async": true, "timeout": 5 } ] }
     ]
   }
 }
