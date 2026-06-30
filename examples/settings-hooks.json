@@ -1,0 +1,28 @@
+{
+  "_comment": "MERGE these into your Claude Code ~/.claude/settings.json under the existing 'hooks' object. Do NOT overwrite hooks you already have. Replace the command with your Python launcher and the path to lamp_status.py. Set the lamp IP via the WLED_IP env var or inside lamp_status.py.",
+
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python /path/to/lamp_status.py working", "async": true, "timeout": 5 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "python /path/to/lamp_status.py attention", "async": true, "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python /path/to/lamp_status.py done", "async": true, "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
