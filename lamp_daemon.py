@@ -52,12 +52,13 @@ _LOCK = os.path.join(L._TMP, "claude_lamp_daemon.lock")
 
 
 def _target_preset(now):
-    """Read shared state under lock, aggregate, return the preset (0 = off)."""
+    """Read state under lock, reap dead sessions, aggregate -> preset (0 = off)."""
     fd = L._acquire()
     try:
         sessions = L._load()
-        live, agg = L._aggregate(sessions, now)
-        if len(live) != len(sessions):  # opportunistic cleanup of TTL-expired
+        reaped = L._reap_dead(sessions, now)  # drop dead-owner + past-TTL sessions
+        live, agg = L._aggregate(reaped, now)
+        if len(live) != len(sessions):  # persist the cleanup
             L._save(live)
     finally:
         L._release(fd)

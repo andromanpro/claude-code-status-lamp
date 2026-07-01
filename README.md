@@ -115,6 +115,8 @@ Run as many Claude Code sessions as you like against one lamp. Each session's st
 
 So an **amber from *any* session latches the lamp amber** until that session is no longer blocked — a busy or idle session can't paint over "someone needs you." When the last session ends, the lamp turns off. The script also de-dups repeats, so a flurry of `PreToolUse` "working" events sends at most one request.
 
+A session is dropped **the moment its owning process is gone** — the hook records the owner's PID and start-time, and the [daemon](#background-daemon-optional) removes any session whose process has exited (or whose PID was reused). So a hard-closed window or a crash never leaves a dead session lingering on a colour; there's no timeout to wait out. Sessions on a platform where the owner can't be resolved fall back to a 6-hour safety-net TTL.
+
 ## Background daemon (optional)
 
 The hooks apply the lamp on every event, so it only re-evaluates *when a hook fires*. If a session finishes and no `idle_prompt` arrives — or a session is killed without a clean `SessionEnd` — its "working" state can linger and hold the lamp blue until some other hook happens to run.

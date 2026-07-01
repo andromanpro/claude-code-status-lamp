@@ -33,6 +33,11 @@ import time
 import tempfile
 import urllib.request
 
+try:
+    import lamp_proc  # process-identity helpers for reliable session liveness
+except Exception:  # keep working even if the helper is missing
+    lamp_proc = None
+
 LAMP_IP = os.environ.get("WLED_IP", "192.168.1.50")
 
 # session state -> WLED preset number
@@ -162,6 +167,26 @@ def _aggregate(sessions, now):
     return live, agg
 
 
+def _reap_dead(sessions, now):
+    """Drop sessions whose owning process is gone, plus past-TTL leftovers.
+
+    The owning-process check (via lamp_proc) is the reliable path: a session
+    that closed without a clean SessionEnd — hard-closed window, crash, kill —
+    is removed the instant its process dies, in ANY state (incl. a stuck amber),
+    not after a 6h heuristic. Records with no resolved owner (or a platform
+    where it couldn't be determined) fall back to the TTL safety net.
+    """
+    live = {}
+    for k, v in sessions.items():
+        if now - v.get("t", 0) > TTL:
+            continue
+        pid = v.get("pid")
+        if pid and lamp_proc is not None and not lamp_proc.is_alive(pid, v.get("pst")):
+            continue  # owner process dead (or its PID reused) -> reap now
+        live[k] = v
+    return live
+
+
 def main():
     try:
         arg = (sys.argv[1] if len(sys.argv) > 1 else "done").strip().lower()
@@ -182,7 +207,16 @@ def main():
             if arg == "off":
                 sessions.pop(sid, None)
             else:
-                sessions[sid] = {"s": arg, "t": now}
+                rec = {"s": arg, "t": now}
+                prev = sessions.get(sid) or {}
+                if prev.get("pid"):  # resolve the owning process once per session
+                    rec["pid"], rec["pst"] = prev.get("pid"), prev.get("pst")
+                elif lamp_proc is not None:
+                    opid, ostart, _oexe = lamp_proc.owner_identity()
+                    if opid:
+                        rec["pid"], rec["pst"] = opid, ostart
+                sessions[sid] = rec
+            sessions = _reap_dead(sessions, now)
             live, agg = _aggregate(sessions, now)
             _save(live)
         finally:
