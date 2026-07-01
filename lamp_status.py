@@ -42,6 +42,9 @@ LAMP_IP = os.environ.get("WLED_IP", "192.168.1.50")
 
 # session state -> WLED preset number
 STATE_PRESET = {"attention": 2, "error": 5, "working": 1, "done": 3}
+# state -> RGB + brightness, for the daemon's per-agent zone rendering (seg[])
+STATE_RGB = {"working": (0, 80, 255), "attention": (255, 150, 0), "done": (0, 255, 40), "error": (255, 0, 0)}
+STATE_BRI = {"working": 110, "attention": 200, "done": 150, "error": 200}
 # aggregation priority, highest first
 PRIORITY = ["attention", "error", "working", "done"]
 TTL = 6 * 3600  # forget a session not updated in 6h (crash safety net)
@@ -133,6 +136,16 @@ def _session_id():
     except Exception:
         pass
     return "default"
+
+
+def _tool():
+    """Which agent this hook is for (--tool claude|codex|...); default claude."""
+    a = sys.argv
+    if "--tool" in a:
+        i = a.index("--tool")
+        if i + 1 < len(a):
+            return (a[i + 1] or "claude").strip().lower() or "claude"
+    return "claude"
 
 
 # Talk to the lamp on the LAN directly — never through a proxy. A system
@@ -232,7 +245,7 @@ def main():
             if arg == "off":
                 sessions.pop(sid, None)
             else:
-                rec = {"s": arg, "t": now}
+                rec = {"s": arg, "t": now, "tool": _tool()}
                 prev = sessions.get(sid) or {}
                 if prev.get("pid"):  # resolve the owning process once per session
                     rec["pid"], rec["pst"] = prev.get("pid"), prev.get("pst")
@@ -247,6 +260,11 @@ def main():
         finally:
             _release(fd)
 
+        # Write-only mode (--write-only or LAMP_WRITE_ONLY): record the state but
+        # leave applying to the background daemon. Used by the Codex hooks so a
+        # tool call never waits on the lamp's network (e.g. LAN blocked by a VPN).
+        if "--write-only" in sys.argv or os.environ.get("LAMP_WRITE_ONLY"):
+            return
         _apply(STATE_PRESET[agg] if agg else 0)  # no live sessions -> off
     except Exception:
         if os.environ.get("WLED_DEBUG"):

@@ -1,0 +1,18 @@
+{
+  "_comment": "Codex CLI hooks for the status lamp — MERGE into ~/.codex/hooks.json under the 'hooks' object (don't overwrite hooks you already have). Enable hooks in ~/.codex/config.toml with 'hooks = true' under [features]. These run WRITE-ONLY: the hook only records this agent's state and lets the background daemon paint, so the daemon can split the matrix into one band per agent (see the 'Multiple agents (zones)' section in the README). The '--tool codex' tag tells the daemon which band this is — use a different name per agent. The daemon MUST be running for the lamp to react. Replace <python> with your launcher (py / python3) and the path with the real one; set the lamp IP via WLED_IP or inside the script. Codex's hook events differ from Claude Code's: there's no SessionEnd/Notification split, so a Codex band clears when its process exits (the daemon reaps it) rather than on an explicit 'off'.",
+
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py working --write-only --tool codex", "timeout": 5 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py working --write-only --tool codex", "timeout": 5 } ] }
+    ],
+    "PermissionRequest": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py attention --write-only --tool codex", "timeout": 5 } ] }
+    ],
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "<python> /path/to/lamp_status.py done --write-only --tool codex", "timeout": 5 } ] }
+    ]
+  }
+}

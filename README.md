@@ -121,7 +121,7 @@ A session is dropped **the moment its owning process is gone** — the hook reco
 
 The hooks apply the lamp on every event, so it only re-evaluates *when a hook fires*. If a session finishes and no `idle_prompt` arrives — or a session is killed without a clean `SessionEnd` — its "working" state can linger and hold the lamp blue until some other hook happens to run.
 
-[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as idle, and applies the winning preset — so the lamp settles to green/off on its own, no hook required. The hooks keep working exactly as before; the daemon is a safety net on top (and the foundation for per-agent zones). It reuses everything in `lamp_status.py` — no new dependencies.
+[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as idle, reaps sessions whose process has exited, and paints the lamp — so it settles to green/off on its own, no hook required. It renders with WLED segments (a solid colour across the matrix for one agent, or one band per agent — see [Multiple agents](#multiple-agents-zones)), which makes it the *sole* renderer: run the hooks write-only alongside it (add `--write-only` to each command) so a hook and the daemon never repaint over each other. It reuses everything in `lamp_status.py` — no new dependencies.
 
 Quick check without touching the lamp: `python lamp_daemon.py --once --dry`.
 
@@ -134,6 +134,25 @@ powershell -ExecutionPolicy Bypass -File examples\install-daemon.ps1
 It registers `ClaudeLampDaemon` to start at logon (auto-restart, no console window). Manage it with `schtasks /Run|/End|/Delete /TN ClaudeLampDaemon`.
 
 **macOS/Linux.** Run `python3 lamp_daemon.py` under launchd / `systemd --user` / an `@reboot` cron.
+
+## Multiple agents (zones)
+
+Run more than one coding agent at once — say Claude Code **and** [Codex CLI](https://developers.openai.com/codex/) — and the daemon splits the matrix into one horizontal band per agent, so you can read both at a glance: Claude on top, Codex below, each in its own status colour. One agent lights the whole matrix; a second band appears the moment that agent starts and clears when it exits.
+
+It builds on the [daemon](#background-daemon-optional) plus two hook flags:
+
+- `--tool <name>` tags which agent a hook belongs to (`claude`, `codex`, …), so the daemon knows which band is which.
+- `--write-only` makes the hook *only* record state and leave all painting to the daemon — required here, or each hook repaints the whole matrix and stomps the split.
+
+**Claude Code** — append both flags to every lamp command in your `settings.json` hooks:
+
+```
+<python> /path/to/lamp_status.py working --write-only --tool claude
+```
+
+**Codex CLI** — merge [`examples/codex-hooks.json`](examples/codex-hooks.json) into `~/.codex/hooks.json`, and enable hooks with `hooks = true` under `[features]` in `~/.codex/config.toml`. Add any other agent the same way, each with its own `--tool` name.
+
+Bands are painted as solid colours (a WLED preset is whole-device, so per-band effects aren't possible); the animated presets from [Customization](#customization) apply in the default no-daemon setup.
 
 ## Limitations
 

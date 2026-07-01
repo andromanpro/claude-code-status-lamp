@@ -26,9 +26,11 @@ Usage:
   python lamp_daemon.py --once --dry   compute + print the preset, do not apply
 """
 import importlib.util
+import json
 import os
 import sys
 import time
+import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -50,19 +52,94 @@ L = _load_logic()
 POLL = max(1, int(os.environ.get("LAMP_POLL", "5")))
 _LOCK = os.path.join(L._TMP, "claude_lamp_daemon.lock")
 
+# Zones: each active agent gets an equal horizontal band, in this order (claude
+# on top). Up to _MAX_ZONES agents are shown at once; one agent -> whole matrix.
+_ORDER = ["claude", "codex", "openclaw", "opencode"]
+_MAX_ZONES = 4
+_leds = 0  # cached LED count (queried from the lamp once)
 
-def _target_preset(now):
-    """Read state under lock, reap dead sessions, aggregate -> preset (0 = off)."""
+
+def _provider_states(sessions, now):
+    """{provider: highest-priority effective state} across live sessions."""
+    groups = {}
+    for v in sessions.values():
+        prov = v.get("tool") or "claude"
+        s = v.get("s")
+        if s == "working" and now - v.get("t", 0) > L.WORKING_TTL:
+            s = "done"  # same idle-freshness demotion as the aggregator
+        groups.setdefault(prov, set()).add(s)
+    out = {}
+    for prov, states in groups.items():
+        agg = next((s for s in L.PRIORITY if s in states), None)
+        if agg:
+            out[prov] = agg
+    return out
+
+
+def _render(now):
+    """Reap dead sessions, then return ordered [(provider, state), ...] to show."""
     fd = L._acquire()
     try:
         sessions = L._load()
-        reaped = L._reap_dead(sessions, now)  # drop dead-owner + past-TTL sessions
-        live, agg = L._aggregate(reaped, now)
-        if len(live) != len(sessions):  # persist the cleanup
-            L._save(live)
+        reaped = L._reap_dead(sessions, now)
+        if len(reaped) != len(sessions):
+            L._save(reaped)
     finally:
         L._release(fd)
-    return L.STATE_PRESET[agg] if agg else 0
+    ps = _provider_states(reaped, now)
+    ordered = [p for p in _ORDER if p in ps] + sorted(p for p in ps if p not in _ORDER)
+    return [(p, ps[p]) for p in ordered]
+
+
+def _led_count():
+    global _leds
+    if _leds:
+        return _leds
+    try:
+        with L._DIRECT.open(f"http://{L.LAMP_IP}/json/info", timeout=2) as r:
+            n = int((json.load(r).get("leds") or {}).get("count") or 0)
+            if n:
+                _leds = n
+                return n
+    except Exception:
+        pass
+    return 256  # sane default until the lamp answers
+
+
+def _apply_zones(active):
+    """Paint one solid-colour horizontal band per active agent (seg[]). True on
+    success. One agent -> a single band across the whole matrix; N agents -> N
+    equal bands, claude on top.
+
+    The daemon always drives the full seg[] and deactivates the unused segments,
+    so every render deterministically owns the whole matrix — a leftover band
+    from a previous split can never linger (a WLED *preset* can't do this: ps:N
+    paints colour/effect but doesn't reset segment bounds, so it can't clear a
+    split). The cost is that solid colours replace any animated preset while the
+    daemon is running; run the daemon as the sole renderer (write-only hooks)."""
+    if not active:
+        payload = {"on": False}
+    else:
+        n = len(active)
+        count = _led_count()
+        seg = []
+        for i in range(_MAX_ZONES):
+            if i < n:
+                _prov, state = active[i]
+                r, g, b = L.STATE_RGB[state]
+                seg.append({"id": i, "start": i * count // n, "stop": (i + 1) * count // n,
+                            "on": True, "fx": 0, "bri": L.STATE_BRI[state], "col": [[r, g, b]]})
+            else:
+                seg.append({"id": i, "stop": 0})  # deactivate unused segments
+        payload = {"on": True, "bri": 255, "seg": seg}
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request(f"http://{L.LAMP_IP}/json/state", data=body,
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        L._DIRECT.open(req, timeout=2)
+        return True
+    except Exception:
+        return False
 
 
 def _single_instance():
@@ -88,17 +165,19 @@ def _run():
     if fd is None:
         return  # another daemon already owns the lamp
     L._log("daemon started")
-    last_logged = None
+    last_sig = None
+    last_ok = None
     try:
         while True:
             try:
-                target = _target_preset(int(time.time()))
-                ok = L._apply(target)
-                sig = (target, ok)
-                if sig != last_logged:  # log transitions only, not every tick
-                    L._log("lamp -> preset %d %s" % (
-                        target, "ok" if ok else "UNREACHABLE (lamp offline / LAN blocked?)"))
-                    last_logged = sig
+                active = _render(int(time.time()))
+                sig = tuple(active)
+                if sig != last_sig or last_ok is not True:  # changed, or retry a failed POST
+                    ok = _apply_zones(active)
+                    if sig != last_sig or ok != last_ok:    # log real transitions only
+                        desc = " | ".join("%s:%s" % (p, s) for p, s in active) or "off"
+                        L._log("lamp -> [%s] %s" % (desc, "ok" if ok else "UNREACHABLE (offline / LAN blocked?)"))
+                    last_sig, last_ok = sig, ok
                 os.utime(_LOCK, None)  # heartbeat for the stale-lock reclaim
             except Exception:
                 if os.environ.get("WLED_DEBUG"):
@@ -117,10 +196,11 @@ def _run():
 def main():
     args = sys.argv[1:]
     if "--once" in args:
-        preset = _target_preset(int(time.time()))
-        print(f"aggregate preset -> {preset}")
+        active = _render(int(time.time()))
+        desc = " | ".join("%s:%s" % (p, s) for p, s in active) or "off"
+        print("zones -> [%s]" % desc)
         if "--dry" not in args:
-            L._apply(preset)
+            print("applied:", _apply_zones(active))
         return
     _run()
 
