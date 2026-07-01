@@ -31,6 +31,10 @@ PRESETS = [
 ]
 
 
+# Talk to the lamp on the LAN directly — never through a system HTTP/SOCKS proxy.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def post(ip, payload):
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
@@ -39,11 +43,11 @@ def post(ip, payload):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    return urllib.request.urlopen(req, timeout=5).read()
+    return _DIRECT.open(req, timeout=5).read()
 
 
 def get_json(ip, path):
-    with urllib.request.urlopen(f"http://{ip}{path}", timeout=5) as r:
+    with _DIRECT.open(f"http://{ip}{path}", timeout=5) as r:
         return json.loads(r.read())
 
 
@@ -61,13 +65,20 @@ def main():
     if "ver" not in info:
         print(f"Warning: {ip} responded but does not look like WLED — continuing anyway.")
 
+    count = int((info.get("leds") or {}).get("count") or 0)  # full-strip length
+
     print(f"Writing presets to WLED at {ip} (overwrites slots 1, 2, 3, 5)...")
     all_ok = True
     for preset, name, (r, g, b), bri in PRESETS:
-        post(ip, {"on": True, "bri": bri, "seg": [{
-            "id": 0, "fx": 0, "sx": 128, "ix": 128, "pal": 0,
-            "col": [[r, g, b], [0, 0, 0], [0, 0, 0]],
-        }]})
+        # One solid segment spanning the whole strip, with any leftover extra
+        # segments deactivated — so applying a preset always paints the full
+        # matrix, never a slice (e.g. if a segment layout was left behind).
+        seg0 = {"id": 0, "start": 0, "on": True, "fx": 0, "sx": 128, "ix": 128,
+                "pal": 0, "col": [[r, g, b], [0, 0, 0], [0, 0, 0]]}
+        if count:
+            seg0["stop"] = count
+        post(ip, {"on": True, "bri": bri,
+                  "seg": [seg0, {"id": 1, "stop": 0}, {"id": 2, "stop": 0}, {"id": 3, "stop": 0}]})
         time.sleep(0.3)
         post(ip, {"psave": preset, "n": name})
 
