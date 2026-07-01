@@ -42,11 +42,14 @@ LAMP_IP = os.environ.get("WLED_IP", "192.168.1.50")
 
 # session state -> WLED preset number
 STATE_PRESET = {"attention": 2, "error": 5, "working": 1, "done": 3}
-# state -> RGB + brightness, for the daemon's per-agent zone rendering (seg[])
-STATE_RGB = {"working": (0, 80, 255), "attention": (255, 150, 0), "done": (0, 255, 40), "error": (255, 0, 0)}
-STATE_BRI = {"working": 110, "attention": 200, "done": 150, "error": 200}
-# aggregation priority, highest first
-PRIORITY = ["attention", "error", "working", "done"]
+# state -> RGB + brightness, for the daemon's per-agent zone rendering (seg[]).
+# "idle" = a working session quiet past WORKING_TTL with no explicit done-signal
+# (a long tool call or a pause); its own teal keeps real green ("done") meaning
+# "your turn". No preset for it: the preset/direct path still demotes to "done".
+STATE_RGB = {"working": (0, 80, 255), "idle": (0, 160, 160), "attention": (255, 150, 0), "done": (0, 255, 40), "error": (255, 0, 0)}
+STATE_BRI = {"working": 110, "idle": 90, "attention": 200, "done": 150, "error": 200}
+# aggregation priority, highest first (idle above done: never over-promise green)
+PRIORITY = ["attention", "error", "working", "idle", "done"]
 TTL = 6 * 3600  # forget a session not updated in 6h (crash safety net)
 # A "working" session quiet longer than this counts as idle ("done"): it
 # finished or was killed without a clean idle_prompt / SessionEnd. Active work

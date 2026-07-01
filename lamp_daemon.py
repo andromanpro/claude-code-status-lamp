@@ -66,7 +66,8 @@ def _provider_states(sessions, now):
         prov = v.get("tool") or "claude"
         s = v.get("s")
         if s == "working" and now - v.get("t", 0) > L.WORKING_TTL:
-            s = "done"  # same idle-freshness demotion as the aggregator
+            s = "idle"  # quiet past the window -> its own teal, NOT green:
+            #             a long tool call or a pause, not a confirmed "done"
         groups.setdefault(prov, set()).add(s)
     out = {}
     for prov, states in groups.items():

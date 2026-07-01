@@ -32,6 +32,14 @@ SessionEnd                         ──▶ off
 
 The trade-off: **green appears ~60s after the turn ends, not instantly**, because `idle_prompt` fires after a short idle period. That's intentional — we trade instant-green for never-lying-green. (Don't "helpfully" add `Stop → done` back; it reintroduces the false green.)
 
+### Amber when Claude asks you a question (optional)
+
+There's no Claude Code event for *"the assistant asked you something"* — a question surfaces only as `idle_prompt` (~60s later → green), the same as being done. [`lamp_ask_detect.py`](lamp_ask_detect.py) closes that gap: wire it as a `Stop` hook and it reads the last assistant message from the transcript — if it ends with `?` (or used the `AskUserQuestion` tool) it flags the session **amber** ("answer me"), latched until you reply. Otherwise it does nothing, so green/idle still come only from `idle_prompt` — no false green. That's what makes it the one safe `Stop` hook: it *only* ever writes amber-on-a-question, never green.
+
+```
+Stop → <python> /path/to/lamp_ask_detect.py    # async; alongside any other Stop hooks
+```
+
 ## Requirements
 
 - **Python 3.6+** — standard library only, no `pip install`. On Windows use `py`, on macOS/Linux `python3`.
@@ -121,7 +129,7 @@ A session is dropped **the moment its owning process is gone** — the hook reco
 
 The hooks apply the lamp on every event, so it only re-evaluates *when a hook fires*. If a session finishes and no `idle_prompt` arrives — or a session is killed without a clean `SessionEnd` — its "working" state can linger and hold the lamp blue until some other hook happens to run.
 
-[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as idle, reaps sessions whose process has exited, and paints the lamp — so it settles to green/off on its own, no hook required. It renders with WLED segments (a solid colour across the matrix for one agent, or one band per agent — see [Multiple agents](#multiple-agents-zones)), which makes it the *sole* renderer: run the hooks write-only alongside it (add `--write-only` to each command) so a hook and the daemon never repaint over each other. It reuses everything in `lamp_status.py` — no new dependencies.
+[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as **idle** (a distinct teal, *not* green — so a green band always means a real done-signal, never just "quiet for a while"), reaps sessions whose process has exited, and paints the lamp — so it settles to green/off on its own, no hook required. It renders with WLED segments (a solid colour across the matrix for one agent, or one band per agent — see [Multiple agents](#multiple-agents-zones)), which makes it the *sole* renderer: run the hooks write-only alongside it (add `--write-only` to each command) so a hook and the daemon never repaint over each other. It reuses everything in `lamp_status.py` — no new dependencies.
 
 Quick check without touching the lamp: `python lamp_daemon.py --once --dry`.
 
