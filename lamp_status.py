@@ -40,6 +40,11 @@ STATE_PRESET = {"attention": 2, "error": 5, "working": 1, "done": 3}
 # aggregation priority, highest first
 PRIORITY = ["attention", "error", "working", "done"]
 TTL = 6 * 3600  # forget a session not updated in 6h (crash safety net)
+# A "working" session quiet longer than this counts as idle ("done"): it
+# finished or was killed without a clean idle_prompt / SessionEnd. Active work
+# refreshes "working" on every tool call, so this only demotes genuinely quiet
+# sessions and stops a stuck/zombie session from pinning the lamp blue.
+WORKING_TTL = 180
 
 _TMP = tempfile.gettempdir()
 _SESSIONS = os.path.join(_TMP, "claude_lamp_sessions.json")
@@ -131,6 +136,26 @@ def _apply(preset):
         pass
 
 
+def _aggregate(sessions, now):
+    """Highest-priority preset across live sessions (None -> off). Pure/testable.
+
+    Drops sessions past TTL, and demotes a stale "working" session to "done" so a
+    finished-but-not-closed (or hard-killed) session no longer forces the lamp
+    blue. Returns (live_sessions, aggregate_state_or_None).
+    """
+    live = {k: v for k, v in sessions.items() if now - v.get("t", 0) <= TTL}
+
+    def _effective(v):
+        s = v.get("s")
+        if s == "working" and now - v.get("t", 0) > WORKING_TTL:
+            return "done"
+        return s
+
+    states = {_effective(v) for v in live.values()}
+    agg = next((s for s in PRIORITY if s in states), None)
+    return live, agg
+
+
 def main():
     try:
         arg = (sys.argv[1] if len(sys.argv) > 1 else "done").strip().lower()
@@ -152,10 +177,8 @@ def main():
                 sessions.pop(sid, None)
             else:
                 sessions[sid] = {"s": arg, "t": now}
-            live = {k: v for k, v in sessions.items() if now - v.get("t", 0) <= TTL}
+            live, agg = _aggregate(sessions, now)
             _save(live)
-            states = {v.get("s") for v in live.values()}
-            agg = next((s for s in PRIORITY if s in states), None)
         finally:
             _release(fd)
 
