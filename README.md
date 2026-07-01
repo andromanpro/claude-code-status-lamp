@@ -13,7 +13,7 @@ The real feature isn't "blue means working." It's **amber = Claude needs *you***
 - 🟢 **Green** — idle, your turn
 - 🔴 **Red** — a turn failed
 
-No polling, no daemon, no service — just a tiny standard-library Python script that fires one HTTP request to the lamp from Claude Code's lifecycle hooks. It's **fail-silent**: lamp offline or on another network → the hook does nothing and never blocks Claude.
+No polling and no *required* background service — just a tiny standard-library Python script that fires one HTTP request to the lamp from Claude Code's lifecycle hooks. It's **fail-silent**: lamp offline or on another network → the hook does nothing and never blocks Claude. *(An optional [background daemon](#background-daemon-optional) re-evaluates on a timer — handy if `idle_prompt` doesn't always reach you — and is the basis for per-agent zones. The hooks-only setup below needs no daemon at all.)*
 
 ## How it works
 
@@ -115,9 +115,27 @@ Run as many Claude Code sessions as you like against one lamp. Each session's st
 
 So an **amber from *any* session latches the lamp amber** until that session is no longer blocked — a busy or idle session can't paint over "someone needs you." When the last session ends, the lamp turns off. The script also de-dups repeats, so a flurry of `PreToolUse` "working" events sends at most one request.
 
+## Background daemon (optional)
+
+The hooks apply the lamp on every event, so it only re-evaluates *when a hook fires*. If a session finishes and no `idle_prompt` arrives — or a session is killed without a clean `SessionEnd` — its "working" state can linger and hold the lamp blue until some other hook happens to run.
+
+[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as idle, and applies the winning preset — so the lamp settles to green/off on its own, no hook required. The hooks keep working exactly as before; the daemon is a safety net on top (and the foundation for per-agent zones). It reuses everything in `lamp_status.py` — no new dependencies.
+
+Quick check without touching the lamp: `python lamp_daemon.py --once --dry`.
+
+**Windows (Task Scheduler, no admin).** Edit the `pythonw.exe` path in [`examples/install-daemon.ps1`](examples/install-daemon.ps1), then:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File examples\install-daemon.ps1
+```
+
+It registers `ClaudeLampDaemon` to start at logon (auto-restart, no console window). Manage it with `schtasks /Run|/End|/Delete /TN ClaudeLampDaemon`.
+
+**macOS/Linux.** Run `python3 lamp_daemon.py` under launchd / `systemd --user` / an `@reboot` cron.
+
 ## Limitations
 
-- **Green lags ~60s** behind the actual turn-end — see [How it works](#how-it-works). This is the deliberate price of never showing a false green.
+- **Green lags ~60s** behind the actual turn-end — see [How it works](#how-it-works). This is the deliberate price of never showing a false green. (The optional [daemon](#background-daemon-optional) guarantees the lamp *eventually* settles even if `idle_prompt` never arrives, but it's not a faster path to green.)
 
 ## Security
 
