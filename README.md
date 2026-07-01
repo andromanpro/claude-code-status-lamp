@@ -154,6 +154,7 @@ It registers `ClaudeLampDaemon` to start at logon (auto-restart, no console wind
 | Lamp green when Claude is clearly busy | You wired `Stop → done` — remove it (see "Why Stop is deliberately not wired") |
 | Amber/green never differ | `Notification` needs split matchers (`permission_prompt` vs `idle_prompt`), not `matcher: ""` |
 | IP changed, lamp stopped reacting | Set a DHCP reservation; update `WLED_IP` |
+| Hook hangs / lags behind a VPN or proxy | The script POSTs to the lamp **directly**, bypassing any system HTTP/SOCKS proxy — a proxy that can't route to your LAN can't stall the hook |
 
 ## Credits
 

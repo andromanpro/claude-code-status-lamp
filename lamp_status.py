@@ -112,6 +112,12 @@ def _session_id():
     return "default"
 
 
+# Talk to the lamp on the LAN directly — never through a proxy. A system
+# HTTP/SOCKS proxy (a VPN or anti-censorship tool) that can't reach a LAN
+# address would otherwise make this POST hang and block the hook.
+_DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _apply(preset):
     """POST the preset (or turn off for 0), de-duping identical repeats."""
     try:
@@ -128,7 +134,7 @@ def _apply(preset):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    urllib.request.urlopen(req, timeout=2)
+    _DIRECT.open(req, timeout=2)
     try:
         with open(_LAST, "w") as f:
             f.write(str(preset))
