@@ -157,6 +157,7 @@ It registers `ClaudeLampDaemon` to start at logon (auto-restart, no console wind
 | Amber/green never differ | `Notification` needs split matchers (`permission_prompt` vs `idle_prompt`), not `matcher: ""` |
 | IP changed, lamp stopped reacting | Set a DHCP reservation; update `WLED_IP` |
 | Hook hangs / lags behind a VPN or proxy | The script POSTs to the lamp **directly**, bypassing any system HTTP/SOCKS proxy — a proxy that can't route to your LAN can't stall the hook |
+| Not sure what the lamp is doing | Check `claude_lamp.log` in your temp dir — it records state transitions and logs `UNREACHABLE` when the lamp can't be reached (offline, or the LAN blocked by a full-tunnel VPN). Set `LAMP_LOG=0` to disable |
 
 ## Credits
 

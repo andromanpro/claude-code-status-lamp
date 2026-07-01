@@ -55,6 +55,24 @@ _TMP = tempfile.gettempdir()
 _SESSIONS = os.path.join(_TMP, "claude_lamp_sessions.json")
 _LAST = os.path.join(_TMP, "claude_lamp_last")
 _LOCK = os.path.join(_TMP, "claude_lamp.lock")
+_LOG = os.path.join(_TMP, "claude_lamp.log")
+_LOG_MAX = 256 * 1024  # bytes; the log rotates to .1 once it grows past this
+
+
+def _log(msg):
+    """Append a timestamped line to the debug log. Set LAMP_LOG=0 to disable."""
+    if os.environ.get("LAMP_LOG", "1") in ("0", "false", "no"):
+        return
+    try:
+        if os.path.getsize(_LOG) > _LOG_MAX:
+            os.replace(_LOG, _LOG + ".1")
+    except OSError:
+        pass
+    try:
+        with open(_LOG, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
 
 
 def _acquire():
@@ -124,11 +142,12 @@ _DIRECT = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _apply(preset):
-    """POST the preset (or turn off for 0), de-duping identical repeats."""
+    """POST the preset (0 = off), de-duping repeats. Returns True on success,
+    False if the lamp couldn't be reached (offline, or LAN blocked by a VPN)."""
     try:
         with open(_LAST) as f:
             if f.read().strip() == str(preset):
-                return
+                return True
     except OSError:
         pass
     payload = {"on": False} if preset == 0 else {"on": True, "ps": preset}
@@ -139,12 +158,16 @@ def _apply(preset):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    _DIRECT.open(req, timeout=2)
+    try:
+        _DIRECT.open(req, timeout=2)
+    except Exception:
+        return False
     try:
         with open(_LAST, "w") as f:
             f.write(str(preset))
     except OSError:
         pass
+    return True
 
 
 def _aggregate(sessions, now):
@@ -179,10 +202,12 @@ def _reap_dead(sessions, now):
     live = {}
     for k, v in sessions.items():
         if now - v.get("t", 0) > TTL:
+            _log(f"reap {k[:8]} (TTL) was {v.get('s')}")
             continue
         pid = v.get("pid")
         if pid and lamp_proc is not None and not lamp_proc.is_alive(pid, v.get("pst")):
-            continue  # owner process dead (or its PID reused) -> reap now
+            _log(f"reap {k[:8]} (owner {pid} gone) was {v.get('s')}")
+            continue
         live[k] = v
     return live
 

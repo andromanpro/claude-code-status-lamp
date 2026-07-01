@@ -87,10 +87,18 @@ def _run():
     fd = _single_instance()
     if fd is None:
         return  # another daemon already owns the lamp
+    L._log("daemon started")
+    last_logged = None
     try:
         while True:
             try:
-                L._apply(_target_preset(int(time.time())))
+                target = _target_preset(int(time.time()))
+                ok = L._apply(target)
+                sig = (target, ok)
+                if sig != last_logged:  # log transitions only, not every tick
+                    L._log("lamp -> preset %d %s" % (
+                        target, "ok" if ok else "UNREACHABLE (lamp offline / LAN blocked?)"))
+                    last_logged = sig
                 os.utime(_LOCK, None)  # heartbeat for the stale-lock reclaim
             except Exception:
                 if os.environ.get("WLED_DEBUG"):
@@ -99,6 +107,7 @@ def _run():
             time.sleep(POLL)
     finally:
         try:
+            L._log("daemon stopped")
             os.close(fd)
             os.remove(_LOCK)
         except OSError:

@@ -157,6 +157,7 @@ powershell -ExecutionPolicy Bypass -File examples\install-daemon.ps1
 | Янтарный и зелёный не различаются | `Notification` нужны раздельные matcher'ы (`permission_prompt` vs `idle_prompt`), а не `matcher: ""` |
 | IP сменился, лампа не реагирует | Поставить DHCP-резерв; обновить `WLED_IP` |
 | Хук виснет / лагает за VPN или прокси | Скрипт ходит к лампе **напрямую**, минуя любой системный HTTP/SOCKS-прокси — прокси, который не достаёт до твоей LAN, не подвесит хук |
+| Непонятно, что делает лампа | Смотри `claude_lamp.log` в temp-каталоге — там переходы состояний и `UNREACHABLE`, когда до лампы не достучаться (офлайн или LAN режет full-tunnel VPN). `LAMP_LOG=0` выключает |
 
 ## Благодарности
 
