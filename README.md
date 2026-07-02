@@ -13,7 +13,7 @@ The real feature isn't "blue means working." It's **amber = Claude needs *you***
 - 🟢 **Green** — idle, your turn
 - 🔴 **Red** — a turn failed
 
-No polling and no *required* background service — just a tiny standard-library Python script that fires one HTTP request to the lamp from Claude Code's lifecycle hooks. It's **fail-silent**: lamp offline or on another network → the hook does nothing and never blocks Claude. *(An optional [background daemon](#background-daemon-optional) re-evaluates on a timer — handy if `idle_prompt` doesn't always reach you — and is the basis for per-agent zones. The hooks-only setup below needs no daemon at all.)*
+No polling and no *required* background service — just a tiny standard-library Python script that fires one HTTP request to the lamp from Claude Code's lifecycle hooks. It's **fail-silent**: lamp offline or on another network → the hook does nothing and never blocks Claude. *(An optional [background daemon](#background-daemon-optional) re-evaluates on a timer — handy if `idle_prompt` doesn't always reach you — and powers the multi-session [lava mode](#multiple-sessions-lava-mode). The hooks-only setup below needs no daemon at all.)*
 
 ## How it works
 
@@ -129,7 +129,7 @@ A session is dropped **the moment its owning process is gone** — the hook reco
 
 The hooks apply the lamp on every event, so it only re-evaluates *when a hook fires*. If a session finishes and no `idle_prompt` arrives — or a session is killed without a clean `SessionEnd` — its "working" state can linger and hold the lamp blue until some other hook happens to run.
 
-[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as **idle** (a distinct teal, *not* green — so a green band always means a real done-signal, never just "quiet for a while"), reaps sessions whose process has exited, and paints the lamp — so it settles to green/off on its own, no hook required. It renders with WLED segments (a solid colour across the matrix for one agent, or one band per agent — see [Multiple agents](#multiple-agents-zones)), which makes it the *sole* renderer: run the hooks write-only alongside it (add `--write-only` to each command) so a hook and the daemon never repaint over each other. It reuses everything in `lamp_status.py` — no new dependencies.
+[`lamp_daemon.py`](lamp_daemon.py) closes that gap. It's a small always-on process that re-reads the shared session state on a timer (`LAMP_POLL`, default 5s), treats any "working" session that's been silent past the freshness window as **idle** (a distinct teal, *not* green — so green always means a real done-signal, never just "quiet for a while"), reaps sessions whose process has exited, and paints the lamp — so it settles to green/off on its own, no hook required. It owns the whole render (a solid colour for one session, a lava-lamp drop per session for several — see [Multiple sessions](#multiple-sessions-lava-mode)), which makes it the *sole* renderer: run the hooks write-only alongside it (add `--write-only` to each command) so a hook and the daemon never repaint over each other. It reuses everything in `lamp_status.py` — no new dependencies.
 
 Quick check without touching the lamp: `python lamp_daemon.py --once --dry`.
 
@@ -143,14 +143,16 @@ It registers `ClaudeLampDaemon` to start at logon (auto-restart, no console wind
 
 **macOS/Linux.** Run `python3 lamp_daemon.py` under launchd / `systemd --user` / an `@reboot` cron.
 
-## Multiple agents (zones)
+## Multiple sessions (lava mode)
 
-Run more than one coding agent at once — say Claude Code **and** [Codex CLI](https://developers.openai.com/codex/) — and the daemon splits the matrix into one horizontal band per agent, so you can read both at a glance: Claude on top, Codex below, each in its own status colour. One agent lights the whole matrix; a second band appears the moment that agent starts and clears when it exits.
+Run several sessions at once — a few Claude Code windows, [Codex CLI](https://developers.openai.com/codex/), any mix — and the daemon turns the matrix into a **lava lamp**: WLED's native 2D *Blobs* effect, **one floating drop per live session**, drop colours = the states present. Three sessions working plus one asking you something = slow blue goo with an amber drop drifting through it. One session paints the whole matrix its solid colour; drops appear as sessions start and vanish when they end (or their process dies — the reaper removes them).
+
+It's rendered **two ways at once**: the daemon sets WLED's native effect as the *base* (one JSON POST per state change — fully autonomous, keeps animating if the PC sleeps or the daemon dies), and while it runs it also streams smooth subpixel frames over WLED's realtime UDP on top (~12 KB/s; the native effect moves drops in whole pixels, which reads as stepping on a 16×16 matrix). If the stream stops for any reason, WLED falls back to the native base by itself within ~2 s. `LAMP_STREAM=0` disables the overlay if you prefer POST-only.
 
 It builds on the [daemon](#background-daemon-optional) plus two hook flags:
 
-- `--tool <name>` tags which agent a hook belongs to (`claude`, `codex`, …), so the daemon knows which band is which.
-- `--write-only` makes the hook *only* record state and leave all painting to the daemon — required here, or each hook repaints the whole matrix and stomps the split.
+- `--write-only` makes the hook *only* record state and leave all painting to the daemon — required, or each hook repaints the whole matrix over the effect.
+- `--tool <name>` tags which agent a hook belongs to (`claude`, `codex`, …) — shown in labels/logs.
 
 **Claude Code** — append both flags to every lamp command in your `settings.json` hooks:
 
@@ -160,7 +162,14 @@ It builds on the [daemon](#background-daemon-optional) plus two hook flags:
 
 **Codex CLI** — merge [`examples/codex-hooks.json`](examples/codex-hooks.json) into `~/.codex/hooks.json`, and enable hooks with `hooks = true` under `[features]` in `~/.codex/config.toml`. Add any other agent the same way, each with its own `--tool` name.
 
-Bands are painted as solid colours (a WLED preset is whole-device, so per-band effects aren't possible); the animated presets from [Customization](#customization) apply in the default no-daemon setup.
+**One-time setup:** tell WLED your 2D layout (the *Blobs* effect needs to know it's a matrix) — Settings → LED Preferences → 2D setup in the web UI, or via JSON (this example: 16×16, serpentine rows, bottom-left origin — match yours), then **reboot the lamp** (the layout applies on boot):
+
+```bash
+curl -X POST http://<lamp-ip>/json/cfg -H "Content-Type: application/json" \
+  -d '{"hw":{"led":{"matrix":{"mpc":1,"panels":[{"b":true,"r":false,"v":false,"s":true,"x":0,"y":0,"w":16,"h":16}]}}}}'
+```
+
+Colour caveat for the native base: its palette holds 3 colours, so at most **3 distinct states** show at once — slots are filled in priority order (amber first), so "someone needs you" always wins a drop. The streamed overlay has no such limit (every drop is exactly one session, tinted individually). The overlay lives in [`lamp_lava.py`](lamp_lava.py) — `python lamp_lava.py --demo` to try it standalone, `--orient` to verify your matrix orientation.
 
 ## Limitations
 
